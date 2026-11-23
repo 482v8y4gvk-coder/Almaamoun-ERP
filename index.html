@@ -1,4 +1,4 @@
-<!doctype html>
+!doctype html>
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -9,7 +9,7 @@
 @media(max-width:480px){header{padding:14px}.grid{gap:8px}.card{padding:12px}.metric{font-size:22px}.navbtn{font-size:12px;padding:10px}.lineitems{grid-template-columns:1fr 1fr}.lineitems .field:first-child{grid-column:1/-1}}
 </style></head>
 <body>
-<header><div><h1>AL-MAAMOUN ERP</h1><small>نظام إدارة التكاليف والتسعير والربحية</small></div><div class="actions"><button class="btn" onclick="exportData()">تصدير نسخة احتياطية</button><button class="btn" onclick="document.getElementById('restoreFile').click()">استعادة نسخة</button><input id="restoreFile" type="file" accept="application/json" class="hidden" onchange="importData(event)"><small>نسخة تطوير محلية · v0.3</small></div></header>
+<header><div><h1>AL-MAAMOUN ERP</h1><small>نظام إدارة التكاليف والتسعير والربحية</small></div><div class="actions"><button class="btn" onclick="exportData()">تصدير نسخة احتياطية</button><button class="btn" onclick="document.getElementById('restoreFile').click()">استعادة نسخة</button><input id="restoreFile" type="file" accept="application/json" class="hidden" onchange="importData(event)"><small>نسخة تطوير محلية · v0.5</small></div></header>
 <div class="shell"><nav id="nav">
 <button class="navbtn active" data-page="dashboard">▦ لوحة التحكم</button>
 <button class="navbtn" data-page="materials">▤ المواد الأولية</button>
@@ -49,14 +49,56 @@ function excelPage(){
  const opts=sheets.map((s,i)=>`<option value="${i}">${esc(s.name)} (${s.maxRow} × ${s.maxColumn})</option>`).join('');
  return `<div class="topline"><div><h2>بيانات Excel المستوردة</h2><div class="muted">عرض الأوراق الأصلية مع الاحتفاظ بالصيغ والقيم المحفوظة من Excel</div></div><span class="pill ok">${sheets.length} أوراق مستوردة</span></div>
  <div class="panel"><div class="field" style="max-width:420px"><label>اختر ورقة العمل</label><select id="excelSheet" onchange="renderExcelSheet()">${opts}</select></div><div id="excelSheetView" style="margin-top:14px"></div></div>
- <div class="notice">هذا العرض يحفظ الصيغ الأصلية ويعرضها كنص؛ لم يتم تحويل جميع معادلات Excel إلى محرك حساب تلقائي داخل التطبيق بعد. قارن النتائج مع ملف Excel قبل اعتماد أي تكلفة.</div>`;
+ <div class="notice">يعرض هذا الإصدار الصيغ الأصلية والقيم المحسوبة داخل التطبيق للمعادلات المدعومة (المراجع بين الأوراق، العمليات الحسابية، SUM وIF). راجع أي خلية تظهر ‎#CALC!‎ قبل اعتمادها، فالمحرك ما زال بحاجة إلى اختبارات مطابقة كاملة مع Excel.</div>`;
 }
+
+function excelCellValue(sheetName, rowNum, colNum, stack=[]){
+ const sheets=db.excelWorkbook?.sheets||[];
+ const sh=sheets.find(x=>x.name===sheetName);
+ if(!sh||rowNum<1||colNum<1)return 0;
+ const key=sheetName+'!'+excelColName(colNum)+rowNum;
+ if(stack.includes(key))return 0;
+ const raw=sh.rows?.[rowNum-1]?.[colNum-1];
+ if(raw===null||raw===undefined||raw==='')return 0;
+ if(typeof raw==='number')return raw;
+ if(typeof raw==='object'&&raw.formula)return excelEvalFormula(raw.formula,stack.concat(key));
+ if(typeof raw==='string'&&raw.startsWith('='))return excelEvalFormula(raw,stack.concat(key));
+ const n=Number(raw);return Number.isFinite(n)?n:raw;
+}
+function excelColName(n){let x='';while(n){let r=(n-1)%26;x=String.fromCharCode(65+r)+x;n=Math.floor((n-1)/26)}return x}
+function excelEvalFormula(formula,stack=[]){
+ try{
+  let expr=String(formula).replace(/^=/,'');
+  const rangeRe=/SUM\(\s*(?:(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!)?(\$?[A-Z]{1,3}\$?\d+):(\$?[A-Z]{1,3}\$?\d+)\s*\)/gi;
+  expr=expr.replace(rangeRe,(all,qSheet,uSheet,a,b)=>{
+   const sn=qSheet||uSheet||'';
+   const parse=x=>{const m=x.replace(/\$/g,'').match(/^([A-Z]+)(\d+)$/i);let c=0;for(const ch of m[1].toUpperCase())c=c*26+ch.charCodeAt(0)-64;return {c,r:Number(m[2])}};
+   const p1=parse(a),p2=parse(b);let vals=[];
+   for(let rr=Math.min(p1.r,p2.r);rr<=Math.max(p1.r,p2.r);rr++)for(let cc=Math.min(p1.c,p2.c);cc<=Math.max(p1.c,p2.c);cc++)vals.push(excelCellValue(sn||stack[stack.length-1]?.split('!')[0],rr,cc,stack));
+   return 'SUM('+JSON.stringify(vals)+')';
+  });
+  expr=expr.replace(/(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!([A-Z]{1,3})\$?(\d+)/g,(all,qs,us,col,row)=>{
+   let c=0;for(const ch of col.toUpperCase())c=c*26+ch.charCodeAt(0)-64;
+   return String(Number(excelCellValue(qs||us,Number(row),c,stack))||0);
+  });
+  expr=expr.replace(/(?<![A-Z0-9_"])\$?([A-Z]{1,3})\$?(\d+)/gi,(all,col,row)=>{
+   let c=0;for(const ch of col.toUpperCase())c=c*26+ch.charCodeAt(0)-64;
+   const sn=stack[stack.length-1]?.split('!')[0]||'';
+   return String(Number(excelCellValue(sn,Number(row),c,stack))||0);
+  });
+  const SUM=(...args)=>args.flat(Infinity).reduce((a,b)=>a+(Number(b)||0),0);
+  const IF=(condition,yes,no)=>condition?yes:no;
+  const value=Function('SUM','IF','return ('+expr+')')(SUM,IF);
+  return typeof value==='number'&&Number.isFinite(value)?value:value;
+ }catch(e){return '#CALC!'}
+}
+
 function renderExcelSheet(){
  const sheets=db.excelWorkbook?.sheets||[];const sel=document.getElementById('excelSheet');const view=document.getElementById('excelSheetView');if(!sel||!view)return;
  const s=sheets[Number(sel.value)];if(!s)return;
  const colName=n=>{let x='';while(n){let r=(n-1)%26;x=String.fromCharCode(65+r)+x;n=Math.floor((n-1)/26)}return x};
- const cell=v=>{if(v===null||v===undefined)return '';if(typeof v==='object'&&v.formula){let cached=v.cached===null||v.cached===undefined?'':'\\nالقيمة المحفوظة: '+String(v.cached);return '<span title="'+esc(v.formula+cached)+'">'+esc(v.formula)+(cached?'<div class="muted">'+esc(cached)+'</div>':'')+'</span>'}return esc(String(v))};
- view.innerHTML=`<div class="muted" style="margin-bottom:8px">${esc(s.name)} — ${s.maxRow} صف × ${s.maxColumn} عمود. الصيغ تظهر كما هي عند وجودها.</div><div style="overflow:auto;max-height:65vh"><table style="min-width:900px"><thead><tr><th>رقم الصف</th>${Array.from({length:s.maxColumn},(_,i)=>`<th>${colName(i+1)}</th>`).join('')}</tr></thead><tbody>${s.rows.map((r,i)=>`<tr><td>${i+1}</td>${r.map(v=>`<td>${cell(v)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+ const cell=(v,r,c)=>{if(v===null||v===undefined)return '';if(typeof v==='object'&&v.formula){const computed=excelCellValue(s.name,r+1,c+1);const shown=typeof computed==='number'?computed.toLocaleString('en-US',{maximumFractionDigits:4}):String(computed);const cached=v.cached===null||v.cached===undefined?'':'القيمة المحفوظة: '+String(v.cached);return '<span title="'+esc(v.formula)+'">'+esc(v.formula)+'</span><div class="pill ok" style="margin-top:5px">المحسوب: '+esc(shown)+'</div>'+(cached?'<div class="muted">'+esc(cached)+'</div>':'')}return esc(String(v))};
+ view.innerHTML=`<div class="muted" style="margin-bottom:8px">${esc(s.name)} — ${s.maxRow} صف × ${s.maxColumn} عمود. الصيغ تظهر كما هي عند وجودها.</div><div style="overflow:auto;max-height:65vh"><table style="min-width:900px"><thead><tr><th>رقم الصف</th>${Array.from({length:s.maxColumn},(_,i)=>`<th>${colName(i+1)}</th>`).join('')}</tr></thead><tbody>${s.rows.map((r,i)=>`<tr><td>${i+1}</td>${r.map((v,c)=>`<td>${cell(v,i,c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}function filterRows(inp,id){let q=inp.value.toLowerCase();document.querySelectorAll('#'+id+' tbody tr').forEach(r=>r.style.display=r.innerText.toLowerCase().includes(q)?'':'none')}
